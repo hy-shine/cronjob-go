@@ -37,6 +37,17 @@ import (
 	cronlib "github.com/robfig/cron/v3"
 )
 
+const (
+	retryModeRegular = "regular"
+	retryModeBackoff = "backoff"
+)
+
+const (
+	initialWaitDuration    = 1 * time.Second
+	defaultWaitDuration    = 5 * time.Second
+	defaultMaxWaitDuration = 3 * time.Minute
+)
+
 var (
 	// ErrJobNotFound indicates the requested job does not exist
 	ErrJobNotFound = errors.New("job not found")
@@ -95,8 +106,10 @@ type cronConf struct {
 	// Time zone for the cron scheduler
 	location *time.Location
 
-	retry uint
-	wait  time.Duration
+	retry       uint
+	retryMode   string
+	initialWait time.Duration
+	wait        time.Duration
 }
 
 // Option defines a functional option for configuring the cron scheduler
@@ -128,6 +141,23 @@ func WithRetry(retry uint, wait time.Duration) Option {
 	return func(opt *cronConf) {
 		opt.retry = retry
 		opt.wait = wait
+		opt.retryMode = retryModeRegular
+	}
+}
+
+// WithRetryBackoff configures exponential backoff retry behavior for failed jobs.
+// It takes three parameters:
+//   - retry: The maximum number of retry attempts
+//   - initialWait: The initial wait duration between retries
+//   - maxWait: The maximum wait duration between retries (not currently used in implementation)
+//
+// The wait time doubles with each retry attempt (initialWait * 2^i).
+func WithRetryBackoff(retry uint, initialWait, maxWait time.Duration) Option {
+	return func(opt *cronConf) {
+		opt.retry = retry
+		opt.wait = maxWait
+		opt.initialWait = initialWait
+		opt.retryMode = retryModeBackoff
 	}
 }
 
@@ -143,46 +173,55 @@ type cronJobImpl struct {
 	mu         sync.RWMutex        // Mutex for thread-safe access
 	jobs       map[string]*cronJob // Map of job IDs to cronJob instances
 	cronClient *cronlib.Cron       // Underlying cron scheduler
-	logger     cronlib.Logger
 
-	retry uint
-	wait  time.Duration
+	cronConf
 }
 
 // New creates a new cron scheduler instance with optional configuration
 func New(opts ...Option) (CronJober, error) {
-	var c cronConf
+	instance := &cronJobImpl{
+		jobs: make(map[string]*cronJob),
+		cronConf: cronConf{
+			retry:       1,
+			retryMode:   retryModeRegular,
+			initialWait: initialWaitDuration,
+			wait:        defaultWaitDuration,
+		},
+	}
+
 	for _, opt := range opts {
-		opt(&c)
+		opt(&instance.cronConf)
 	}
 
 	var optList []cronlib.Option
-	if c.enableSeconds {
+	if instance.enableSeconds {
 		optList = append(optList, cronlib.WithSeconds())
 	}
-	if c.location != nil {
-		optList = append(optList, cronlib.WithLocation(c.location))
+	if instance.location != nil {
+		optList = append(optList, cronlib.WithLocation(instance.location))
 	}
-	if c.logger == nil {
-		c.logger = cronlib.DefaultLogger
+	if instance.retryMode == retryModeBackoff {
+		if instance.wait < instance.initialWait {
+			return nil, errors.New("wait must be greater than initTime")
+		}
+		if instance.initialWait == 0 {
+			instance.initialWait = initialWaitDuration
+		}
+		if instance.wait == 0 {
+			instance.wait = defaultMaxWaitDuration
+		}
 	}
-	if c.retry == 0 {
-		c.retry = 1
+	if instance.retry == 0 {
+		instance.retry = 1
 	}
-	if c.wait == 0 {
-		c.wait = time.Second
+	if instance.wait == 0 {
+		instance.wait = defaultWaitDuration
 	}
+	optList = append(optList, cronlib.WithLogger(instance.logger))
 
-	optList = append(optList, cronlib.WithLogger(c.logger))
-	clinet := cronlib.New(optList...)
+	instance.cronClient = cronlib.New(optList...)
 
-	return &cronJobImpl{
-		jobs:       make(map[string]*cronJob),
-		cronClient: clinet,
-		logger:     c.logger,
-		retry:      c.retry,
-		wait:       c.wait,
-	}, nil
+	return instance, nil
 }
 
 // Add schedules a new job with the given ID, cron spec, and function
@@ -306,7 +345,16 @@ func (j *cronJobImpl) runWithRetry(jobId, spec string, f func() error) {
 			return
 		}
 		j.logger.Error(err, "job run failed", "jobId", jobId, "spec", spec)
-		time.Sleep(j.wait)
+
+		if i < int(j.retry)-1 {
+			var waitTime time.Duration
+			if j.retryMode == retryModeBackoff {
+				waitTime = j.wait * (1 << i) // Exponential backoff: wait * 2^i
+			} else {
+				waitTime = j.wait
+			}
+			time.Sleep(waitTime)
+		}
 	}
 }
 
