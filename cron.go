@@ -97,7 +97,7 @@ type CronJober interface {
 	Jobs() []string
 
 	// Remove deletes a job with the given ID
-	Remove(jobId string) error
+	Remove(jobId ...string) error
 
 	// Start begins the cron scheduler
 	Start()
@@ -339,6 +339,7 @@ func (j *cronJobImpl) Upsert(jobId, spec string, f func() error) error {
 func (j *cronJobImpl) Get(jobId string) (string, bool) {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
+
 	info, ok := j.jobs[jobId]
 	if !ok {
 		return "", false
@@ -383,22 +384,28 @@ func (j *cronJobImpl) runWithRetry(jobId, spec string, f func() error) {
 	}
 }
 
-// Remove deletes a job with the given ID
-func (j *cronJobImpl) Remove(jobId string) error {
-	if jobId == "" {
-		return ErrJobIdEmpty
+// Remove deletes one or more jobs with the given IDs. It removes each job from both the internal
+// job map and the cron scheduler. If any of the provided job IDs are not found, it returns
+// ErrJobNotFound and stops processing further jobs. If the jobIds slice is empty, it returns
+// nil immediately without making any changes.
+func (j *cronJobImpl) Remove(jobIds ...string) error {
+	if len(jobIds) == 0 {
+		return nil
 	}
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
-	job, ok := j.jobs[jobId]
-	if !ok {
-		return ErrJobNotFound
+	for i := range jobIds {
+		if _, ok := j.jobs[jobIds[i]]; !ok {
+			return fmt.Errorf("jobId %s %w", jobIds[i], ErrJobNotFound)
+		}
 	}
-
-	j.cronClient.Remove(job.entryId)
-	delete(j.jobs, jobId)
+	for i := range jobIds {
+		job, _ := j.jobs[jobIds[i]]
+		j.cronClient.Remove(job.entryId)
+		delete(j.jobs, jobIds[i])
+	}
 
 	return nil
 }
@@ -407,6 +414,7 @@ func (j *cronJobImpl) Remove(jobId string) error {
 func (j *cronJobImpl) Jobs() []string {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
+
 	jobIds := make([]string, 0, len(j.jobs))
 	for jobId := range j.jobs {
 		jobIds = append(jobIds, jobId)
