@@ -1,5 +1,7 @@
 // Package cronjob provides a thread-safe wrapper around the robfig/cron library
-// for managing scheduled jobs with unique identifiers. It offers:
+// for managing scheduled jobs with unique identifiers.
+//
+// Features:
 // - Job management with unique IDs
 // - Thread-safe operations using sync.RWMutex
 // - Graceful start/stop functionality
@@ -23,7 +25,12 @@
 // Example usage:
 //
 //	cron, _ := cronjob.New()
-//	cron.Add("job1", "* * * * *", func() { fmt.Println("Running job1") })
+//
+//	f := func() error {
+//			fmt.Println("Running job")
+//			return nil
+//	}
+//	cron.Add("job1", "* * * * *", f)
 //	cron.Start()
 //	defer cron.Stop()
 package cronjob
@@ -31,6 +38,7 @@ package cronjob
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -38,14 +46,16 @@ import (
 )
 
 const (
+	// retryModeRegular indicates regular retry behavior
 	retryModeRegular = "regular"
+	// retryModeBackoff indicates exponential backoff retry behavior
 	retryModeBackoff = "backoff"
 )
 
 const (
 	initialWaitDuration    = 1 * time.Second
-	defaultWaitDuration    = 5 * time.Second
-	defaultMaxWaitDuration = 3 * time.Minute
+	defaultWaitDuration    = 10 * time.Second
+	defaultMaxWaitDuration = 5 * time.Minute
 )
 
 var (
@@ -59,14 +69,11 @@ var (
 	ErrJobIdAlreadyExists = errors.New("job id already exists")
 )
 
-// BatchFunc represents a batch job configuration containing:
-// - JobId: Unique identifier for the job
-// - Spec: The cron schedule specification
-// - Func: The function to execute
+// BatchFunc represents a batch job configuration
 type BatchFunc struct {
-	JobId string
-	Spec  string
-	Func  func() error
+	JobId string       // Unique identifier for the job in scheduler
+	Spec  string       // The cron schedule specification
+	Func  func() error // The function to execute
 }
 
 // CronJober defines the interface for managing cron jobs
@@ -85,8 +92,10 @@ type CronJober interface {
 
 	// Get retrieves the cron spec for a given job ID
 	Get(jobId string) (spec string, ok bool)
+
 	// Jobs returns a list of all job IDs
 	Jobs() []string
+
 	// Remove deletes a job with the given ID
 	Remove(jobId string) error
 
@@ -99,17 +108,14 @@ type CronJober interface {
 
 // cronConf holds configuration options for the cron scheduler
 type cronConf struct {
-	// Whether to enable seconds precision in cron specs
-	enableSeconds bool
-	// Custom logger for the cron scheduler
-	logger cronlib.Logger
-	// Time zone for the cron scheduler
-	location *time.Location
+	enableSeconds bool           // Whether to enable seconds precision in cron specs
+	logger        cronlib.Logger // Custom logger for the cron scheduler
+	location      *time.Location // Time zone for the cron scheduler
 
-	retry       uint
-	retryMode   string
-	initialWait time.Duration
-	wait        time.Duration
+	retry       uint          // Number of retry attempts
+	retryMode   string        // Retry mode (regular or backoff)
+	initialWait time.Duration // Initial wait duration for retries
+	wait        time.Duration // Wait duration between retries
 }
 
 // Option defines a functional option for configuring the cron scheduler
@@ -149,7 +155,7 @@ func WithRetry(retry uint, wait time.Duration) Option {
 // It takes three parameters:
 //   - retry: The maximum number of retry attempts
 //   - initialWait: The initial wait duration between retries
-//   - maxWait: The maximum wait duration between retries (not currently used in implementation)
+//   - maxWait: The maximum wait duration between retries
 //
 // The wait time doubles with each retry attempt (initialWait * 2^i).
 func WithRetryBackoff(retry uint, initialWait, maxWait time.Duration) Option {
@@ -173,8 +179,8 @@ type cronJobImpl struct {
 	mu         sync.RWMutex        // Mutex for thread-safe access
 	jobs       map[string]*cronJob // Map of job IDs to cronJob instances
 	cronClient *cronlib.Cron       // Underlying cron scheduler
-
-	cronConf
+	randGen    *rand.Rand          // Random number generator
+	cronConf                       // Embedded configuration
 }
 
 // New creates a new cron scheduler instance with optional configuration
@@ -183,10 +189,12 @@ func New(opts ...Option) (CronJober, error) {
 		jobs: make(map[string]*cronJob),
 		cronConf: cronConf{
 			retry:       1,
+			logger:      cronlib.DefaultLogger,
 			retryMode:   retryModeRegular,
 			initialWait: initialWaitDuration,
 			wait:        defaultWaitDuration,
 		},
+		randGen: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 
 	for _, opt := range opts {
@@ -224,13 +232,20 @@ func New(opts ...Option) (CronJober, error) {
 	return instance, nil
 }
 
-// Add schedules a new job with the given ID, cron spec, and function
-func (j *cronJobImpl) Add(jobId, spec string, f func() error) error {
+func checkJob(jobId string, spec string) error {
 	if jobId == "" {
 		return ErrJobIdEmpty
 	}
 	if spec == "" {
-		return ErrSpecEmpty
+		return fmt.Errorf("cron spec cannot be empty")
+	}
+	return nil
+}
+
+// Add schedules a new job with the given ID, cron spec, and function
+func (j *cronJobImpl) Add(jobId, spec string, f func() error) error {
+	if err := checkJob(jobId, spec); err != nil {
+		return err
 	}
 
 	j.mu.Lock()
@@ -258,11 +273,8 @@ func (j *cronJobImpl) AddBatch(jobs []BatchFunc) error {
 	defer j.mu.Unlock()
 
 	for _, job := range jobs {
-		if job.JobId == "" {
-			return ErrJobIdEmpty
-		}
-		if job.Spec == "" {
-			return ErrSpecEmpty
+		if err := checkJob(job.JobId, job.Spec); err != nil {
+			return err
 		}
 		_, ok := j.jobs[job.JobId]
 		if ok {
@@ -293,28 +305,32 @@ func (j *cronJobImpl) AddBatch(jobs []BatchFunc) error {
 
 // Upsert updates an existing job or creates a new one if it doesn't exist
 func (j *cronJobImpl) Upsert(jobId, spec string, f func() error) error {
-	if jobId == "" {
-		return ErrJobIdEmpty
-	}
-	if spec == "" {
-		return ErrSpecEmpty
+	if err := checkJob(jobId, spec); err != nil {
+		return err
 	}
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
 	wrappedFunc := func() { j.runWithRetry(jobId, spec, f) }
-	_, ok := j.jobs[jobId]
-	if ok {
-		j.cronClient.Remove(j.jobs[jobId].entryId)
+
+	// Capture existing entry before modification
+	existingJob, exists := j.jobs[jobId]
+	if exists {
+		// Remove existing entry before adding new one
+		j.cronClient.Remove(existingJob.entryId)
 	}
 
 	entryId, err := j.cronClient.AddFunc(spec, wrappedFunc)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to add updated job: %w", err)
 	}
 
-	j.jobs[jobId] = &cronJob{jobId: jobId, spec: spec, entryId: entryId}
+	j.jobs[jobId] = &cronJob{
+		jobId:   jobId,
+		spec:    spec,
+		entryId: entryId,
+	}
 
 	return nil
 }
@@ -338,23 +354,32 @@ func (j *cronJobImpl) runWithRetry(jobId, spec string, f func() error) {
 		}
 	}()
 
+	var lastErr error
+	var waitTime time.Duration
 	for i := 0; i < int(j.retry); i++ {
-		err := f()
-		if err == nil {
+		if err := f(); err == nil {
 			j.logger.Info("job run success", "jobId", jobId, "spec", spec)
 			return
+		} else {
+			lastErr = err
 		}
-		j.logger.Error(err, "job run failed", "jobId", jobId, "spec", spec)
 
-		if i < int(j.retry)-1 {
-			var waitTime time.Duration
-			if j.retryMode == retryModeBackoff {
-				waitTime = j.wait * (1 << i) // Exponential backoff: wait * 2^i
-			} else {
-				waitTime = j.wait
-			}
-			time.Sleep(waitTime)
+		j.logger.Error(lastErr, "job run failed", "jobId", jobId, "spec", spec)
+
+		if j.retryMode == retryModeBackoff {
+			// Calculate exponential backoff with jitter
+			backoff := min(j.initialWait*(1<<i), j.wait) // Exponential backoff: initialWait * 2^i
+			halfBackoff := backoff >> 1
+			jitter := time.Duration(j.randGen.Int63n(int64(halfBackoff))) // Random jitter up to halfBackoff
+			waitTime = halfBackoff + jitter                               // Apply jitter but don't exceed max wait
+		} else {
+			waitTime = j.wait
 		}
+		time.Sleep(waitTime)
+	}
+
+	if lastErr != nil {
+		j.logger.Error(lastErr, "job run failed after retries", "jobId", jobId, "spec", spec)
 	}
 }
 

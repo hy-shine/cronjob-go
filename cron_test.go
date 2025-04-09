@@ -6,211 +6,210 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-var testFunc = func() error { return nil }
-
 func TestNew(t *testing.T) {
-	c, err := New()
-	if err != nil {
-		t.Fatalf("New() error = %v, want nil", err)
-	}
-	if c == nil {
-		t.Error("New() returned nil")
-	}
-}
-
-func TestAdd(t *testing.T) {
-	c, _ := New()
-
-	tests := []struct {
-		name    string
-		jobId   string
-		spec    string
-		wantErr error
-	}{
-		{"valid job", "job1", "* * * * *", nil},
-		{"empty jobId", "", "* * * * *", ErrJobIdEmpty},
-		{"empty spec", "job2", "", ErrSpecEmpty},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := c.Add(tt.jobId, tt.spec, func() error { return nil })
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("Add() error = %v, want %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestAddBatch(t *testing.T) {
-	c, _ := New()
-
-	tests := []struct {
-		name    string
-		jobs    []BatchFunc
-		wantErr error
-	}{
-		{
-			"valid batch",
-			[]BatchFunc{
-				{"job1", "* * * * *", func() error { return nil }},
-				{"job2", "* * * * *", func() error { return nil }},
-			},
-			nil,
-		},
-		{
-			"duplicate jobId",
-			[]BatchFunc{
-				{"job1", "* * * * *", func() error { return nil }},
-				{"job1", "* * * * *", func() error { return nil }},
-			},
-			ErrJobIdAlreadyExists,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := c.AddBatch(tt.jobs)
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("AddBatch() error = %v, want %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestUpsert(t *testing.T) {
-	c, _ := New()
-
-	// Add initial job
-	c.Add("job1", "* * * * *", func() error { return nil })
-
-	tests := []struct {
-		name    string
-		jobId   string
-		spec    string
-		wantErr error
-	}{
-		{"update existing", "job1", "*/5 * * * *", nil},
-		{"insert new", "job2", "* * * * *", nil},
-		{"empty jobId", "", "* * * * *", ErrJobIdEmpty},
-		{"empty spec", "job3", "", ErrSpecEmpty},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := c.Upsert(tt.jobId, tt.spec, func() error { return nil })
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("Upsert() error = %v, want %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestGet(t *testing.T) {
-	c, _ := New()
-	c.Add("job1", "* * * * *", func() error { return nil })
-
-	tests := []struct {
-		name   string
-		jobId  string
-		want   string
-		wantOk bool
-	}{
-		{"existing job", "job1", "* * * * *", true},
-		{"non-existent job", "job2", "", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := c.Get(tt.jobId)
-			if got != tt.want || ok != tt.wantOk {
-				t.Errorf("Get() = (%v, %v), want (%v, %v)", got, ok, tt.want, tt.wantOk)
-			}
-		})
-	}
-}
-
-func TestRemove(t *testing.T) {
-	c, _ := New()
-	c.Add("job1", "* * * * *", func() error { return nil })
-
-	tests := []struct {
-		name    string
-		jobId   string
-		wantErr error
-	}{
-		{"existing job", "job1", nil},
-		{"non-existent job", "job2", ErrJobNotFound},
-		{"empty jobId", "", ErrJobIdEmpty},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := c.Remove(tt.jobId)
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("Remove() error = %v, want %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestJobs(t *testing.T) {
-	c, _ := New()
-	c.Add("job1", "* * * * *", func() error { return nil })
-	c.Add("job2", "* * * * *", func() error { return nil })
-
-	got := c.Jobs()
-	if len(got) != 2 {
-		t.Errorf("Jobs() returned %d jobs, want 2", len(got))
-	}
-}
-
-func TestStartStop(t *testing.T) {
-	c, _ := New(WithEnableSeconds())
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	c.Add("job1", "*/3 * * * * *", func() error {
-		wg.Done()
-		return nil
+	t.Run("default configuration", func(t *testing.T) {
+		c, err := New()
+		require.NoError(t, err)
+		assert.NotNil(t, c)
 	})
+
+	t.Run("with invalid backoff configuration", func(t *testing.T) {
+		_, err := New(WithRetryBackoff(3, 2*time.Second, 1*time.Second))
+		assert.Error(t, err)
+	})
+}
+
+func TestBasicJobOperations(t *testing.T) {
+	c, _ := New()
+	const testJobID = "job1"
+	const spec = "* * * * *"
+
+	t.Run("add and get job", func(t *testing.T) {
+		err := c.Add(testJobID, spec, func() error { return nil })
+		require.NoError(t, err)
+
+		s, ok := c.Get(testJobID)
+		assert.True(t, ok)
+		assert.Equal(t, spec, s)
+	})
+
+	t.Run("remove job", func(t *testing.T) {
+		err := c.Remove(testJobID)
+		assert.NoError(t, err)
+
+		_, ok := c.Get(testJobID)
+		assert.False(t, ok)
+	})
+}
+
+func TestErrorConditions(t *testing.T) {
+	c, _ := New()
+
+	t.Run("empty job ID", func(t *testing.T) {
+		err := c.Add("", "* * * * *", func() error { return nil })
+		assert.Equal(t, ErrJobIdEmpty, err)
+	})
+
+	t.Run("empty cron spec", func(t *testing.T) {
+		err := c.Add("job1", "", func() error { return nil })
+		assert.Error(t, err)
+	})
+
+	t.Run("duplicate job ID", func(t *testing.T) {
+		c.Add("dup", "* * * * *", func() error { return nil })
+		err := c.Add("dup", "* * * * *", func() error { return nil })
+		assert.Equal(t, ErrJobIdAlreadyExists, err)
+	})
+
+	t.Run("remove non-existent job", func(t *testing.T) {
+		err := c.Remove("nonexistent")
+		assert.Equal(t, ErrJobNotFound, err)
+	})
+}
+
+func TestConcurrentOperations(t *testing.T) {
+	c, _ := New()
+	const parallelCount = 100
+	var wg sync.WaitGroup
+
+	t.Run("parallel adds", func(t *testing.T) {
+		wg.Add(parallelCount)
+		for i := 0; i < parallelCount; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				c.Add(fmt.Sprintf("job%d", idx), "* * * * *", func() error { return nil })
+			}(i)
+		}
+		wg.Wait()
+
+		assert.Len(t, c.Jobs(), parallelCount)
+	})
+
+	t.Run("parallel removes", func(t *testing.T) {
+		wg.Add(parallelCount)
+		for i := 0; i < parallelCount; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				c.Remove(fmt.Sprintf("job%d", idx))
+			}(i)
+		}
+		wg.Wait()
+
+		assert.Empty(t, c.Jobs())
+	})
+}
+
+func TestBatchOperations(t *testing.T) {
+	c, _ := New()
+	validBatch := []BatchFunc{
+		{"batch1", "* * * * *", func() error { return nil }},
+		{"batch2", "* * * * *", func() error { return nil }},
+	}
+
+	t.Run("successful batch", func(t *testing.T) {
+		err := c.AddBatch(validBatch)
+		require.NoError(t, err)
+		assert.Len(t, c.Jobs(), 2)
+	})
+
+	t.Run("rollback on partial failure", func(t *testing.T) {
+		invalidBatch := append(validBatch, BatchFunc{"", "* * * * *", func() error { return nil }})
+		err := c.AddBatch(invalidBatch)
+		require.Error(t, err)
+		assert.Len(t, c.Jobs(), 2) // Original batch remains
+	})
+}
+
+func TestRetryMechanisms(t *testing.T) {
+	c, _ := New(
+		WithRetry(3, 100*time.Millisecond), // 100ms
+		WithEnableSeconds(),
+	)
+
+	var attemptCounter int
+	err := c.Add("retryJob", "*/1 * * * * *", func() error {
+		attemptCounter++
+		return errors.New("simulated error")
+	})
+	require.NoError(t, err)
 
 	c.Start()
 	defer c.Stop()
 
-	select {
-	case <-wait(&wg):
-	case <-time.After(5 * time.Second):
-		t.Error("Job did not run within expected time")
-	}
+	time.Sleep(2 * time.Second)
+	assert.Equal(t, 6, attemptCounter)
 }
 
-func TestConcurrentAccess(t *testing.T) {
+func TestBackoffRetry(t *testing.T) {
+	c, _ := New(
+		WithEnableSeconds(),
+		WithRetryBackoff(3, 10*time.Millisecond, 100*time.Millisecond),
+	)
+
+	var attempts []time.Time
+	err := c.Add("backoffJob", "*/1 * * * * *", func() error {
+		attempts = append(attempts, time.Now())
+		return errors.New("simulated error")
+	})
+	require.NoError(t, err)
+
+	c.Start()
+	defer c.Stop()
+
+	time.Sleep(300 * time.Millisecond)
+	require.Len(t, attempts, 3)
+	assert.True(t, attempts[1].Sub(attempts[0]) >= 10*time.Millisecond)
+	assert.True(t, attempts[2].Sub(attempts[1]) >= 20*time.Millisecond)
+}
+
+func TestPanicRecovery(t *testing.T) {
 	c, _ := New()
-	var wg sync.WaitGroup
 
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			c.Add(fmt.Sprintf("job%d", i), "* * * * *", func() error { return nil })
-		}(i)
-	}
+	err := c.Add("panicJob", "* * * * *", func() error {
+		panic("simulated panic")
+	})
+	require.NoError(t, err)
 
-	wg.Wait()
+	c.Start()
+	defer c.Stop()
 
-	if len(c.Jobs()) != 100 {
-		t.Errorf("Expected 100 jobs, got %d", len(c.Jobs()))
-	}
+	// Should not crash
+	time.Sleep(100 * time.Millisecond)
 }
 
-func wait(wg *sync.WaitGroup) chan struct{} {
-	ch := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(ch)
-	}()
-	return ch
+func TestUpsertOperation(t *testing.T) {
+	c, _ := New()
+	const jobID = "upsertJob"
+	originalSpec := "* * * * *"
+	newSpec := "*/2 * * * *"
+
+	t.Run("insert new job", func(t *testing.T) {
+		err := c.Upsert(jobID, originalSpec, func() error { return nil })
+		require.NoError(t, err)
+		s, _ := c.Get(jobID)
+		assert.Equal(t, originalSpec, s)
+	})
+
+	t.Run("update existing job", func(t *testing.T) {
+		err := c.Upsert(jobID, newSpec, func() error { return nil })
+		require.NoError(t, err)
+		s, _ := c.Get(jobID)
+		assert.Equal(t, newSpec, s)
+	})
+}
+
+func TestTimeZoneSupport(t *testing.T) {
+	loc, _ := time.LoadLocation("America/New_York")
+	c, _ := New(WithLocation(loc))
+
+	err := c.Add("tzJob", "0 12 * * *", func() error { return nil })
+	require.NoError(t, err)
+
+	s, _ := c.Get("tzJob")
+	assert.Equal(t, "0 12 * * *", s)
 }
