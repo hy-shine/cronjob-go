@@ -110,15 +110,26 @@ type CronJober interface {
 }
 
 // cronConf holds configuration options for the cron scheduler
+// cronConf holds the configuration options for the cron scheduler
 type cronConf struct {
-	enableSeconds bool           // Whether to enable seconds precision in cron specs
-	logger        cronlib.Logger // Custom logger for the cron scheduler
-	location      *time.Location // Time zone for the cron scheduler
+	// enableSeconds determines if the cron parser should interpret the first field as seconds
+	enableSeconds bool
 
-	retry       uint          // Number of retry attempts
-	retryMode   string        // Retry mode (regular or backoff)
-	initialWait time.Duration // Initial wait duration for retries
-	wait        time.Duration // Wait duration between retries
+	// logger is the custom logger instance for the cron scheduler
+	logger cronlib.Logger
+
+	// location specifies the time zone for the cron scheduler
+	location *time.Location
+
+	// retry specifies the number of retry attempts for failed jobs
+	retry uint
+	// retryMode defines the retry strategy (regular or backoff)
+	retryMode string
+
+	// initialWait is the initial wait duration before retries (used in backoff mode)
+	initialWait time.Duration
+	// wait is the wait duration between retries
+	wait time.Duration
 }
 
 // Option defines a functional option for configuring the cron scheduler
