@@ -95,6 +95,8 @@ type CronJober interface {
 
 	// Jobs returns a list of all job IDs
 	Jobs() []string
+	// Len returns the number of jobs
+	Len() int
 
 	// Remove deletes a job with the given ID
 	Remove(jobId ...string) error
@@ -121,8 +123,8 @@ type cronConf struct {
 	// location specifies the time zone for the cron scheduler
 	location *time.Location
 
-	// skipIfStillRunning determines if a job should be skipped if it is still running
-	skipIfStillRunning bool
+	// skipIfJobRunning determines if a job should be skipped if it is still running
+	skipIfJobRunning bool
 
 	// retry specifies the number of retry attempts for failed jobs
 	retry uint
@@ -144,11 +146,11 @@ func WithEnableSeconds() Option {
 	}
 }
 
-// SkipIfStillRunning skips an invocation of the Job if a previous invocation is
+// WithSkipIfJobRunning skips an invocation of the Job if a previous invocation is
 // still running. It logs skips to the given logger at Info level.
-func WithSkipIfStillRunning() Option {
+func WithSkipIfJobRunning() Option {
 	return func(opt *cronConf) {
-		opt.skipIfStillRunning = true
+		opt.skipIfJobRunning = true
 	}
 }
 
@@ -251,7 +253,7 @@ func New(opts ...Option) (CronJober, error) {
 	}
 
 	jobWrapper := []cronlib.JobWrapper{cronlib.Recover(instance.logger)}
-	if instance.skipIfStillRunning {
+	if instance.skipIfJobRunning {
 		jobWrapper = append(jobWrapper, cronlib.SkipIfStillRunning(instance.logger))
 	}
 	optList = append(optList, cronlib.WithLogger(instance.logger), cronlib.WithChain(jobWrapper...))
@@ -277,11 +279,17 @@ func (j *cronJobImpl) Add(jobId, spec string, f func() error) error {
 		return err
 	}
 
+	j.mu.RLock()
+	_, exists := j.jobs[jobId]
+	j.mu.RUnlock()
+	if exists {
+		return ErrJobIdAlreadyExists
+	}
+
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
-	_, ok := j.jobs[jobId]
-	if ok {
+	if _, exists := j.jobs[jobId]; exists {
 		return ErrJobIdAlreadyExists
 	}
 
@@ -296,7 +304,6 @@ func (j *cronJobImpl) Add(jobId, spec string, f func() error) error {
 		Spec:    spec,
 		entryId: entryId,
 	}
-
 	return nil
 }
 
@@ -447,6 +454,14 @@ func (j *cronJobImpl) Jobs() []string {
 		jobIds = append(jobIds, jobId)
 	}
 	return jobIds
+}
+
+// Len returns the number of jobs currently scheduled in the cron scheduler.
+func (j *cronJobImpl) Len() int {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+
+	return len(j.jobs)
 }
 
 // Clear removes all jobs from the cron scheduler. It safely handles concurrent
