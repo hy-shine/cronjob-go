@@ -121,11 +121,13 @@ type cronConf struct {
 	// location specifies the time zone for the cron scheduler
 	location *time.Location
 
+	// skipIfStillRunning determines if a job should be skipped if it is still running
+	skipIfStillRunning bool
+
 	// retry specifies the number of retry attempts for failed jobs
 	retry uint
 	// retryMode defines the retry strategy (regular or backoff)
 	retryMode string
-
 	// initialWait is the initial wait duration before retries (used in backoff mode)
 	initialWait time.Duration
 	// wait is the wait duration between retries
@@ -139,6 +141,14 @@ type Option func(*cronConf)
 func WithEnableSeconds() Option {
 	return func(opt *cronConf) {
 		opt.enableSeconds = true
+	}
+}
+
+// SkipIfStillRunning skips an invocation of the Job if a previous invocation is
+// still running. It logs skips to the given logger at Info level.
+func WithSkipIfStillRunning() Option {
+	return func(opt *cronConf) {
+		opt.skipIfStillRunning = true
 	}
 }
 
@@ -239,7 +249,12 @@ func New(opts ...Option) (CronJober, error) {
 	if instance.wait == 0 {
 		instance.wait = defaultWaitDuration
 	}
-	optList = append(optList, cronlib.WithLogger(instance.logger))
+
+	jobWrapper := []cronlib.JobWrapper{cronlib.Recover(instance.logger)}
+	if instance.skipIfStillRunning {
+		jobWrapper = append(jobWrapper, cronlib.SkipIfStillRunning(instance.logger))
+	}
+	optList = append(optList, cronlib.WithLogger(instance.logger), cronlib.WithChain(jobWrapper...))
 
 	instance.cronClient = cronlib.New(optList...)
 
@@ -276,7 +291,11 @@ func (j *cronJobImpl) Add(jobId, spec string, f func() error) error {
 		return err
 	}
 
-	j.jobs[jobId] = &JobInfo{JobId: jobId, Spec: spec, entryId: entryId}
+	j.jobs[jobId] = &JobInfo{
+		JobId:   jobId,
+		Spec:    spec,
+		entryId: entryId,
+	}
 
 	return nil
 }
@@ -363,12 +382,6 @@ func (j *cronJobImpl) Get(jobId string) (JobInfo, bool) {
 }
 
 func (j *cronJobImpl) runWithRetry(jobId, spec string, f func() error) {
-	defer func() {
-		if err := recover(); err != nil {
-			j.logger.Error(fmt.Errorf("run job panic: %v", err), "job run failed", "jobId", jobId, "spec", spec)
-		}
-	}()
-
 	var lastErr error
 	var waitTime time.Duration
 	for i := 0; i < int(j.retry); i++ {
