@@ -168,9 +168,11 @@ func TestBackoffRetry(t *testing.T) {
 }
 
 func TestPanicRecovery(t *testing.T) {
-	c, _ := New()
+	c, _ := New(
+		WithEnableSeconds(),
+	)
 
-	err := c.Add("panicJob", "* * * * *", func() error {
+	err := c.Add("panicJob", "* * * * * *", func() error {
 		panic("simulated panic")
 	})
 	require.NoError(t, err)
@@ -179,7 +181,7 @@ func TestPanicRecovery(t *testing.T) {
 	defer c.Stop()
 
 	// Should not crash
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(time.Second)
 }
 
 func TestUpsertOperation(t *testing.T) {

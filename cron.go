@@ -91,13 +91,16 @@ type CronJober interface {
 	Upsert(jobId, spec string, f func() error) error
 
 	// Get retrieves the cron spec for a given job ID
-	Get(jobId string) (spec string, ok bool)
+	Get(jobId string) (info JobInfo, ok bool)
 
 	// Jobs returns a list of all job IDs
 	Jobs() []string
 
 	// Remove deletes a job with the given ID
 	Remove(jobId ...string) error
+
+	// Clear removes all jobs from the cron scheduler
+	Clear()
 
 	// Start begins the cron scheduler
 	Start()
@@ -167,17 +170,17 @@ func WithRetryBackoff(retry uint, initialWait, maxWait time.Duration) Option {
 	}
 }
 
-// cronJob represents a single scheduled job
-type cronJob struct {
-	jobId   string          // Unique identifier for the job
-	spec    string          // Cron expression
+// JobInfo represents a single scheduled job
+type JobInfo struct {
+	JobId   string          // Unique identifier for the job
+	Spec    string          // Cron expression
 	entryId cronlib.EntryID // Internal cron entry ID
 }
 
 // cronJobImpl is the concrete implementation of the CronJober interface
 type cronJobImpl struct {
 	mu         sync.RWMutex        // Mutex for thread-safe access
-	jobs       map[string]*cronJob // Map of job IDs to cronJob instances
+	jobs       map[string]*JobInfo // Map of job IDs to cronJob instances
 	cronClient *cronlib.Cron       // Underlying cron scheduler
 	randGen    *rand.Rand          // Random number generator
 	cronConf                       // Embedded configuration
@@ -186,7 +189,7 @@ type cronJobImpl struct {
 // New creates a new cron scheduler instance with optional configuration
 func New(opts ...Option) (CronJober, error) {
 	instance := &cronJobImpl{
-		jobs: make(map[string]*cronJob),
+		jobs: make(map[string]*JobInfo),
 		cronConf: cronConf{
 			retry:       1,
 			logger:      cronlib.DefaultLogger,
@@ -262,7 +265,7 @@ func (j *cronJobImpl) Add(jobId, spec string, f func() error) error {
 		return err
 	}
 
-	j.jobs[jobId] = &cronJob{jobId: jobId, spec: spec, entryId: entryId}
+	j.jobs[jobId] = &JobInfo{JobId: jobId, Spec: spec, entryId: entryId}
 
 	return nil
 }
@@ -298,7 +301,7 @@ func (j *cronJobImpl) AddBatch(jobs []BatchFunc) error {
 		}
 
 		addedJobs[job.JobId] = entryId
-		j.jobs[job.JobId] = &cronJob{jobId: job.JobId, spec: job.Spec, entryId: entryId}
+		j.jobs[job.JobId] = &JobInfo{JobId: job.JobId, Spec: job.Spec, entryId: entryId}
 	}
 	return nil
 }
@@ -326,9 +329,9 @@ func (j *cronJobImpl) Upsert(jobId, spec string, f func() error) error {
 		return fmt.Errorf("failed to add updated job: %w", err)
 	}
 
-	j.jobs[jobId] = &cronJob{
-		jobId:   jobId,
-		spec:    spec,
+	j.jobs[jobId] = &JobInfo{
+		JobId:   jobId,
+		Spec:    spec,
 		entryId: entryId,
 	}
 
@@ -336,16 +339,16 @@ func (j *cronJobImpl) Upsert(jobId, spec string, f func() error) error {
 }
 
 // Get retrieves the cron spec for a given job ID
-func (j *cronJobImpl) Get(jobId string) (string, bool) {
+func (j *cronJobImpl) Get(jobId string) (JobInfo, bool) {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
 
 	info, ok := j.jobs[jobId]
 	if !ok {
-		return "", false
+		return JobInfo{}, false
 	}
 
-	return info.spec, true
+	return *info, true
 }
 
 func (j *cronJobImpl) runWithRetry(jobId, spec string, f func() error) {
@@ -420,6 +423,18 @@ func (j *cronJobImpl) Jobs() []string {
 		jobIds = append(jobIds, jobId)
 	}
 	return jobIds
+}
+
+// Clear removes all jobs from the cron scheduler. It safely handles concurrent
+// access by acquiring a lock before performing the cleanup.
+func (j *cronJobImpl) Clear() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
+	for jobId := range j.jobs {
+		j.cronClient.Remove(j.jobs[jobId].entryId)
+		delete(j.jobs, jobId)
+	}
 }
 
 // Start begins the cron scheduler
