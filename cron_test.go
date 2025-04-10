@@ -128,7 +128,7 @@ func TestBatchOperations(t *testing.T) {
 func TestRetryMechanisms(t *testing.T) {
 	c, _ := New(
 		WithRetry(3, 100*time.Millisecond), // 100ms
-		WithEnableSeconds(),
+		WithCronSeconds(),
 	)
 
 	var attemptCounter int
@@ -147,7 +147,7 @@ func TestRetryMechanisms(t *testing.T) {
 
 func TestBackoffRetry(t *testing.T) {
 	c, _ := New(
-		WithEnableSeconds(),
+		WithCronSeconds(),
 		WithRetryBackoff(3, 20*time.Millisecond, 100*time.Millisecond),
 	)
 
@@ -170,7 +170,7 @@ func TestBackoffRetry(t *testing.T) {
 
 func TestPanicRecovery(t *testing.T) {
 	c, _ := New(
-		WithEnableSeconds(),
+		WithCronSeconds(),
 	)
 
 	err := c.Add("panicJob", "* * * * * *", func() error {
@@ -242,7 +242,7 @@ func TestConcurrencyStress_Upsert(t *testing.T) {
 func TestErrorRecovery(t *testing.T) {
 	c, _ := New(
 		WithRetry(3, 100*time.Millisecond),
-		WithEnableSeconds(),
+		WithCronSeconds(),
 	)
 
 	t.Run("permanent failure", func(t *testing.T) {
@@ -308,7 +308,7 @@ func TestClearOperations(t *testing.T) {
 
 func TestTimePrecision(t *testing.T) {
 	t.Run("seconds precision", func(t *testing.T) {
-		c, _ := New(WithEnableSeconds())
+		c, _ := New(WithCronSeconds())
 		var counter int
 
 		c.Add("secJob", "*/1 * * * * *", func() error {
@@ -325,7 +325,7 @@ func TestTimePrecision(t *testing.T) {
 }
 
 func BenchmarkAddJobs(b *testing.B) {
-	cron, _ := New(WithEnableSeconds())
+	cron, _ := New(WithCronSeconds())
 	cron.Start()
 	defer cron.Stop()
 

@@ -136,63 +136,6 @@ type cronConf struct {
 	wait time.Duration
 }
 
-// Option defines a functional option for configuring the cron scheduler
-type Option func(*cronConf)
-
-// WithEnableSeconds enables the cron parser to interpret the first field as seconds
-func WithEnableSeconds() Option {
-	return func(opt *cronConf) {
-		opt.enableSeconds = true
-	}
-}
-
-// WithSkipIfJobRunning skips an invocation of the Job if a previous invocation is
-// still running. It logs skips to the given logger at Info level.
-func WithSkipIfJobRunning() Option {
-	return func(opt *cronConf) {
-		opt.skipIfJobRunning = true
-	}
-}
-
-// WithLogger sets a custom logger for the cron scheduler
-func WithLogger(logger cronlib.Logger) Option {
-	return func(opt *cronConf) {
-		opt.logger = logger
-	}
-}
-
-// WithLocation sets the time zone for the cron scheduler
-func WithLocation(loc *time.Location) Option {
-	return func(opt *cronConf) {
-		opt.location = loc
-	}
-}
-
-// WithRetry sets the retry count and wait duration for the cron scheduler
-func WithRetry(retry uint, wait time.Duration) Option {
-	return func(opt *cronConf) {
-		opt.retry = retry
-		opt.wait = wait
-		opt.retryMode = retryModeRegular
-	}
-}
-
-// WithRetryBackoff configures exponential backoff retry behavior for failed jobs.
-// It takes three parameters:
-//   - retry: The maximum number of retry attempts
-//   - initialWait: The initial wait duration between retries
-//   - maxWait: The maximum wait duration between retries
-//
-// The wait time doubles with each retry attempt (initialWait * 2^i).
-func WithRetryBackoff(retry uint, initialWait, maxWait time.Duration) Option {
-	return func(opt *cronConf) {
-		opt.retry = retry
-		opt.wait = maxWait
-		opt.initialWait = initialWait
-		opt.retryMode = retryModeBackoff
-	}
-}
-
 // JobInfo represents a single scheduled job
 type JobInfo struct {
 	JobId   string          // Unique identifier for the job
@@ -338,7 +281,11 @@ func (j *cronJobImpl) AddBatch(jobs []BatchFunc) error {
 		}
 
 		addedJobs[job.JobId] = entryId
-		j.jobs[job.JobId] = &JobInfo{JobId: job.JobId, Spec: job.Spec, entryId: entryId}
+		j.jobs[job.JobId] = &JobInfo{
+			JobId:   job.JobId,
+			Spec:    job.Spec,
+			entryId: entryId,
+		}
 	}
 	return nil
 }
