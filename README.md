@@ -4,16 +4,15 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/hy-shine/cronjob-go.svg)](https://pkg.go.dev/github.com/hy-shine/cronjob-go) [![Go Report Card](https://goreportcard.com/badge/github.com/hy-shine/cronjob-go)](https://goreportcard.com/report/github.com/hy-shine/cronjob-go) [![LICENSE](https://img.shields.io/github/license/hy-shine/cronjob-go)](https://github.com/hy-shine/cronjob-go/blob/master/LICENSE)
 
-A thread-safe wrapper around the [robfig/cron/v3](https://github.com/robfig/cron) library for managing scheduled jobs with unique identifiers. Designed for reliability and ease of use in production environments.
+A thread-safe wrapper around the [robfig/cron/v3](https://github.com/robfig/cron) library for managing scheduled jobs with unique identifiers.
 
 ## Features
 
 *   **Job Management:** Add, update, remove, and query jobs using unique string IDs.
 *   **Thread Safety:** All operations are safe for concurrent use via `sync.RWMutex`.
-*   **Graceful Lifecycle:** Start and stop the scheduler gracefully. `Stop()` waits for running jobs to complete.
+*   **Graceful Lifecycle:** Start and stop the scheduler gracefully.
 *   **Flexible Scheduling:** Supports standard cron specifications and optional seconds field precision.
 *   **Timezone Support:** Configure jobs to run in specific timezones.
-*   **Comprehensive Error Handling:** Predefined errors for common issues (e.g., `ErrJobNotFound`, `ErrJobIdAlreadyExists`).
 *   **Configurable Logging:** Integrate with your existing logging infrastructure using `cronlib.Logger`.
 *   **Flexible Retries:** Built-in support for retrying failed jobs with configurable strategies.
 *   **Skip Concurrent Runs:** Option to prevent a job from starting if its previous invocation is still running.
@@ -29,13 +28,8 @@ go get github.com/hy-shine/cronjob-go
 ## Quick Start
 
 ```go
-package main
-
 import (
 	"fmt"
-	"log/slog"
-	"os"
-	"time"
 
 	"github.com/hy-shine/cronjob-go"
 )
@@ -43,34 +37,32 @@ import (
 func main() {
 	cron, err := cronjob.New(
 		cronjob.WithCronSeconds(),
-		cronjob.WithRetry(3, 1*time.Second), // Retry failed jobs 3 times with 1s delay
 	)
 	if err != nil {
-		logger.Error("Failed to create cron scheduler", "error", err)
-		os.Exit(1)
+		panic(err)
 	}
 
 	// Add a job that runs every 5 seconds
 	err = cron.Add("job1", "*/5 * * * * *", func() error {
-		logger.Info("Running job1")
+		fmt.Info("Running job1")
 		return nil
 	})
 	if err != nil {
-		logger.Error("Failed to add job1", "error", err)
+		fmt.Println("Failed to add job1", "error", err)
 	}
 
-	// Add another job
+	// Add job2
 	err = cron.Add("job2", "@every 10s", func() error {
-		logger.Info("Running job2")
+		fmt.Info("Running job2")
 		return nil
 	})
 	if err != nil {
-		logger.Error("Failed to add job2", "error", err)
+		fmt.Error("Failed to add job2", "error", err)
 	}
 
-	// Start the scheduler (non-blocking)
+	// Start the scheduler
 	cron.Start()
-	logger.Info("Cron scheduler started")
+	fmt.Info("Cron scheduler started")
 
 	// Ensure scheduler stops gracefully on exit
 	defer cron.Stop()
@@ -81,63 +73,13 @@ func main() {
 
 ## API Reference
 
-### `CronJober` Interface
-
-```go
-type CronJober interface {
-	// Add schedules a new job. Returns ErrJobIdAlreadyExists if the ID is taken.
-	Add(jobId, spec string, f func() error) error
-
-	// AddBatch schedules multiple jobs atomically. Rolls back on any error.
-	AddBatch(jobs []BatchFunc) error
-
-	// Upsert updates an existing job or adds it if it doesn't exist.
-	Upsert(jobId, spec string, f func() error) error
-
-	// Get retrieves details (spec, internal ID) for a job.
-	Get(jobId string) (info JobInfo, ok bool)
-
-	// Jobs returns a slice of all registered job IDs.
-	Jobs() []string
-
-	// Len returns the count of registered jobs.
-	Len() int
-
-	// Remove deletes one or more jobs by ID. Returns ErrJobNotFound if any ID is invalid.
-	Remove(jobId ...string) error
-
-	// Clear removes all jobs from the scheduler.
-	Clear()
-
-	// Start begins the scheduler in a new goroutine.
-	Start()
-
-	// Stop gracefully shuts down the scheduler, waiting for running jobs.
-	Stop()
-}
-
-// BatchFunc represents a job for batch addition.
-type BatchFunc struct {
-	JobId string
-	Spec  string
-	Func  func() error
-}
-
-// JobInfo contains details about a scheduled job.
-type JobInfo struct {
-	JobId   string
-	Spec    string
-	// ...
-}
-```
-
-### Configuration Options (`cronjob.Option`)
+### Configuration Options
 
 Pass these to `cronjob.New()`:
 
 *   `cronjob.WithCronSeconds()`: Enables the seconds field in cron specs (e.g., `* * * * * *`).
-*   `cronjob.WithSkipIfJobRunning()`: Prevents a job from running if its previous instance is still active. Logs skips.
-*   `cronjob.WithLogger(logger cronlib.Logger)`: Sets a custom logger (must implement `cronlib.Logger` interface). Recommended for production.
+*   `cronjob.WithSkipIfJobRunning()`: Prevents a job from running if its previous instance is still active.
+*   `cronjob.WithLogger(logger cronlib.Logger)`: Sets a custom logger.
 *   `cronjob.WithLocation(loc *time.Location)`: Sets the timezone for interpreting schedules (default: `time.Local`).
 *   `cronjob.WithRetry(retry uint, wait time.Duration)`: Configures regular retries (fixed `wait` duration). `retry` is the number of attempts *after* the initial failure.
 *   `cronjob.WithRetryBackoff(retry uint, initialWait, maxWait time.Duration)`: Configures exponential backoff retries. Wait time starts at `initialWait`, doubles each time (with jitter), up to `maxWait`.
@@ -177,10 +119,10 @@ cron, _ := cronjob.New(cronjob.WithRetry(5, 10*time.Second))
 **Exponential Backoff Retry**
 
 ```go
-cron, _ := cronjob.New(cronjob.WithRetryBackoff(5, 1*time.Second, 60*time.Second))
+cron, _ := cronjob.New(cronjob.WithRetryBackoff(3, 1*time.Second, 30*time.Second))
 ```
 
-### Updating Jobs (`Upsert`)
+### Updating Jobs
 
 Modify the schedule or function of an existing job, or add it if it doesn't exist.
 
