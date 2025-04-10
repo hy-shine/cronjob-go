@@ -9,7 +9,7 @@ import (
 
 func main() {
 	cron, _ := cronjob.New(
-		cronjob.WithEnableSeconds(),
+		cronjob.WithCronSeconds(),
 	)
 	cron.Add("job1", "*/2 * * * * *", func() error {
 		fmt.Printf("running job1 at %s\n", time.Now().Local().Format("2006-01-02 15:04:05"))
