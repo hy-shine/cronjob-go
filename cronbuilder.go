@@ -205,13 +205,19 @@ func (b *CronBuilder) SecondRangeStep(start, end, step int) *CronBuilder {
 	if b.err != nil {
 		return b
 	}
+	// Validate step first before modifying the field
+	if step <= 0 {
+		return b.setError(fmt.Errorf("invalid second step for range %d-%d: %d", start, end, step))
+	}
 	// Reuse range validation
 	b.SecondRange(start, end)
 	if b.err != nil {
 		return b // Return if SecondRange failed
 	}
-	// Validate step
-	if step <= 0 || step > (end-start+1) { // Step must be positive and reasonable for the range
+	// Validate step is reasonable for the range (step must be less than range size)
+	rangeSize := end - start + 1
+	if step >= rangeSize {
+		b.second = "*" // Reset to default on validation failure
 		return b.setError(fmt.Errorf("invalid second step for range %d-%d: %d", start, end, step))
 	}
 	b.second = fmt.Sprintf("%d-%d/%d", start, end, step)
@@ -293,11 +299,18 @@ func (b *CronBuilder) MinuteRangeStep(start, end, step int) *CronBuilder {
 	if b.err != nil {
 		return b
 	}
+	// Validate step first
+	if step <= 0 {
+		return b.setError(fmt.Errorf("invalid minute step for range %d-%d: %d", start, end, step))
+	}
 	b.MinuteRange(start, end)
 	if b.err != nil {
 		return b
 	}
-	if step <= 0 || step > (end-start+1) {
+	// Validate step is reasonable for the range (step must be less than or equal to range size)
+	rangeSize := end - start + 1
+	if step >= rangeSize {
+		b.minute = "*" // Reset to default on validation failure
 		return b.setError(fmt.Errorf("invalid minute step for range %d-%d: %d", start, end, step))
 	}
 	b.minute = fmt.Sprintf("%d-%d/%d", start, end, step)
@@ -379,11 +392,17 @@ func (b *CronBuilder) HourRangeStep(start, end, step int) *CronBuilder {
 	if b.err != nil {
 		return b
 	}
+	// Validate step first
+	if step <= 0 {
+		return b.setError(fmt.Errorf("invalid hour step for range %d-%d: %d", start, end, step))
+	}
 	b.HourRange(start, end)
 	if b.err != nil {
 		return b
 	}
-	if step <= 0 || step > (end-start+1) {
+	rangeSize := end - start + 1
+	if step >= rangeSize {
+		b.hour = "*" // Reset to default on validation failure
 		return b.setError(fmt.Errorf("invalid hour step for range %d-%d: %d", start, end, step))
 	}
 	b.hour = fmt.Sprintf("%d-%d/%d", start, end, step)
@@ -465,11 +484,17 @@ func (b *CronBuilder) DayOfMonthRangeStep(start, end, step int) *CronBuilder {
 	if b.err != nil {
 		return b
 	}
+	// Validate step first
+	if step <= 0 {
+		return b.setError(fmt.Errorf("invalid day of month step for range %d-%d: %d", start, end, step))
+	}
 	b.DayOfMonthRange(start, end)
 	if b.err != nil {
 		return b
 	}
-	if step <= 0 || step > (end-start+1) {
+	rangeSize := end - start + 1
+	if step >= rangeSize {
+		b.dayOfMonth = "*" // Reset to default on validation failure
 		return b.setError(fmt.Errorf("invalid day of month step for range %d-%d: %d", start, end, step))
 	}
 	b.dayOfMonth = fmt.Sprintf("%d-%d/%d", start, end, step)
@@ -551,11 +576,17 @@ func (b *CronBuilder) MonthRangeStep(start, end, step int) *CronBuilder {
 	if b.err != nil {
 		return b
 	}
+	// Validate step first
+	if step <= 0 {
+		return b.setError(fmt.Errorf("invalid month step for range %d-%d: %d", start, end, step))
+	}
 	b.MonthRange(start, end)
 	if b.err != nil {
 		return b
 	}
-	if step <= 0 || step > (end-start+1) {
+	rangeSize := end - start + 1
+	if step >= rangeSize {
+		b.month = "*" // Reset to default on validation failure
 		return b.setError(fmt.Errorf("invalid month step for range %d-%d: %d", start, end, step))
 	}
 	b.month = fmt.Sprintf("%d-%d/%d", start, end, step)
@@ -652,11 +683,31 @@ func (b *CronBuilder) DayOfWeekRangeStep(start, end, step int) *CronBuilder {
 	if b.err != nil {
 		return b
 	}
+	// Validate step first
+	if step <= 0 {
+		return b.setError(fmt.Errorf("invalid day of week step for range %d-%d: %d", start, end, step))
+	}
 	b.DayOfWeekRange(start, end)
 	if b.err != nil {
 		return b
 	}
-	if step <= 0 || step > (maxDayOfWeek+1) {
+	// For DayOfWeek, validate step against the range
+	// Parse the range to get actual start and end after normalization
+	// The dayOfWeek field is set to "actualStart-actualEnd" by DayOfWeekRange
+	actualStart, actualEnd := start, end
+	if start == 7 {
+		actualStart = 0
+	}
+	if end == 7 {
+		actualEnd = 0
+	}
+	rangeSize := actualEnd - actualStart + 1
+	if actualEnd < actualStart {
+		// Handle wrap-around case (e.g., 5-0 means Fri, Sat, Sun)
+		rangeSize = (maxDayOfWeek - actualStart + 1) + (actualEnd + 1)
+	}
+	if step >= rangeSize {
+		b.dayOfWeek = "*" // Reset to default on validation failure
 		return b.setError(fmt.Errorf("invalid day of week step for range %d-%d: %d", start, end, step))
 	}
 	b.dayOfWeek = fmt.Sprintf("%s/%d", b.dayOfWeek, step)
