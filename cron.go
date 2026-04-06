@@ -2,11 +2,11 @@
 // for managing scheduled jobs with unique identifiers.
 //
 // Features:
-// - Job management with unique IDs
-// - Thread-safe operations using sync.RWMutex
-// - Graceful start/stop functionality
-// - Comprehensive error handling for common scenarios
-// - Flexible configuration options including:
+//   - Job management with unique IDs
+//   - Thread-safe operations using sync.RWMutex
+//   - Graceful start/stop functionality
+//   - Comprehensive error handling for common scenarios
+//   - Flexible configuration options including:
 //   - Seconds precision
 //   - Custom logger
 //   - Timezone support
@@ -14,21 +14,21 @@
 // - Batch job addition capability
 //
 // The package implements the CronJober interface which provides methods for:
-// - Adding individual jobs (Add)
-// - Adding multiple jobs in batch (AddBatch)
-// - Updating or inserting jobs (Upsert)
-// - Retrieving job information (Get)
-// - Listing all jobs (Jobs)
-// - Removing jobs (Remove)
-// - Starting and stopping the scheduler (Start, Stop)
+//   - Adding individual jobs (Add)
+//   - Adding multiple jobs in batch (AddBatch)
+//   - Updating or inserting jobs (Upsert)
+//   - Retrieving job information (Get)
+//   - Listing all jobs (Jobs)
+//   - Removing jobs (Remove)
+//   - Starting and stopping the scheduler (Start, Stop)
 //
 // Example usage:
 //
 //	cron, _ := cronjob.New()
 //
 //	f := func() error {
-//			fmt.Println("Running job")
-//			return nil
+//		fmt.Println("Running job")
+//		return nil
 //	}
 //	cron.Add("job1", "* * * * *", f)
 //	cron.Start()
@@ -36,6 +36,7 @@
 package cronjob
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -53,11 +54,12 @@ const (
 )
 
 const (
-	initialWaitDuration    = 1 * time.Second
-	defaultWaitDuration    = 10 * time.Second
+	initialWaitDuration   = 1 * time.Second
+	defaultWaitDuration   = 10 * time.Second
 	defaultMaxWaitDuration = 5 * time.Minute
 )
 
+// Re-export errors for backward compatibility
 var (
 	// ErrJobNotFound indicates the requested job does not exist
 	ErrJobNotFound = errors.New("job not found")
@@ -112,7 +114,6 @@ type CronJober interface {
 }
 
 // cronConf holds configuration options for the cron scheduler
-// cronConf holds the configuration options for the cron scheduler
 type cronConf struct {
 	// enableSeconds determines if the cron parser should interpret the first field as seconds
 	enableSeconds bool
@@ -145,11 +146,17 @@ type JobInfo struct {
 
 // cronJobImpl is the concrete implementation of the CronJober interface
 type cronJobImpl struct {
-	mu         sync.RWMutex        // Mutex for thread-safe access
-	jobs       map[string]*JobInfo // Map of job IDs to cronJob instances
-	cronClient *cronlib.Cron       // Underlying cron scheduler
-	randGen    *rand.Rand          // Random number generator
-	cronConf                       // Embedded configuration
+	mu          sync.RWMutex         // Mutex for thread-safe access
+	jobs        map[string]*JobInfo  // Map of job IDs to cronJob instances
+	cronClient  *cronlib.Cron        // Underlying cron scheduler
+	randGen     *rand.Rand           // Random number generator for jitter
+	retryPolicy retryPolicy         // Retry policy for job execution
+	cronConf                        // Embedded configuration
+}
+
+// retryPolicy defines the interface for retry behavior
+type retryPolicy interface {
+	Execute(ctx context.Context, fn func() error) error
 }
 
 // New creates a new cron scheduler instance with optional configuration
@@ -193,6 +200,18 @@ func New(opts ...Option) (CronJober, error) {
 	}
 	if instance.wait == 0 {
 		instance.wait = defaultWaitDuration
+	}
+
+	// Create retry policy based on configuration
+	if instance.retryMode == retryModeBackoff {
+		instance.retryPolicy = newExponentialBackoffPolicy(
+			int(instance.retry),
+			instance.initialWait,
+			instance.wait,
+			instance.randGen,
+		)
+	} else {
+		instance.retryPolicy = newRegularPolicy(int(instance.retry), instance.wait)
 	}
 
 	jobWrapper := []cronlib.JobWrapper{cronlib.Recover(instance.logger)}
@@ -336,32 +355,11 @@ func (j *cronJobImpl) Get(jobId string) (JobInfo, bool) {
 }
 
 func (j *cronJobImpl) runWithRetry(jobId, spec string, f func() error) {
-	var lastErr error
-	var waitTime time.Duration
-	for i := 0; i < int(j.retry); i++ {
-		if err := f(); err == nil {
-			j.logger.Info("job run success", "jobId", jobId, "spec", spec)
-			return
-		} else {
-			lastErr = err
-		}
-
-		j.logger.Error(lastErr, "job run failed", "jobId", jobId, "spec", spec)
-
-		if j.retryMode == retryModeBackoff {
-			// Calculate exponential backoff with jitter
-			backoff := min(j.initialWait*(1<<i), j.wait) // Exponential backoff: initialWait * 2^i
-			halfBackoff := backoff >> 1
-			jitter := time.Duration(j.randGen.Int63n(int64(halfBackoff))) // Random jitter up to halfBackoff
-			waitTime = halfBackoff + jitter                               // Apply jitter but don't exceed max wait
-		} else {
-			waitTime = j.wait
-		}
-		time.Sleep(waitTime)
-	}
-
-	if lastErr != nil {
-		j.logger.Error(lastErr, "job run failed after retries", "jobId", jobId, "spec", spec)
+	err := j.retryPolicy.Execute(context.Background(), f)
+	if err != nil {
+		j.logger.Error(err, "job run failed after retries", "jobId", jobId, "spec", spec)
+	} else {
+		j.logger.Info("job run success", "jobId", jobId, "spec", spec)
 	}
 }
 
@@ -431,4 +429,85 @@ func (j *cronJobImpl) Start() {
 // Stop gracefully shuts down the cron scheduler
 func (j *cronJobImpl) Stop() {
 	j.cronClient.Stop()
+}
+
+// regularPolicy implements fixed-interval retry
+type regularPolicy struct {
+	maxAttempts int
+	wait        time.Duration
+}
+
+func newRegularPolicy(maxAttempts int, wait time.Duration) *regularPolicy {
+	return &regularPolicy{
+		maxAttempts: maxAttempts,
+		wait:        wait,
+	}
+}
+
+func (r *regularPolicy) Execute(ctx context.Context, fn func() error) error {
+	var lastErr error
+	for i := 0; i < r.maxAttempts; i++ {
+		if err := fn(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+
+		if i < r.maxAttempts-1 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(r.wait):
+			}
+		}
+	}
+	return fmt.Errorf("max retries (%d) exceeded: %w", r.maxAttempts, lastErr)
+}
+
+// exponentialBackoffPolicy implements exponential backoff retry with jitter
+type exponentialBackoffPolicy struct {
+	maxAttempts int
+	initialWait time.Duration
+	maxWait     time.Duration
+	randGen     *rand.Rand
+}
+
+func newExponentialBackoffPolicy(maxAttempts int, initialWait, maxWait time.Duration, randGen *rand.Rand) *exponentialBackoffPolicy {
+	return &exponentialBackoffPolicy{
+		maxAttempts: maxAttempts,
+		initialWait: initialWait,
+		maxWait:     maxWait,
+		randGen:     randGen,
+	}
+}
+
+func (e *exponentialBackoffPolicy) Execute(ctx context.Context, fn func() error) error {
+	var lastErr error
+	for i := 0; i < e.maxAttempts; i++ {
+		if err := fn(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+
+		if i < e.maxAttempts-1 {
+			backoff := e.calculateBackoff(i)
+			jitter := time.Duration(e.randGen.Int63n(int64(backoff / 2)))
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff/2 + jitter):
+			}
+		}
+	}
+	return fmt.Errorf("max retries (%d) exceeded: %w", e.maxAttempts, lastErr)
+}
+
+func (e *exponentialBackoffPolicy) calculateBackoff(attempt int) time.Duration {
+	backoff := e.initialWait * time.Duration(1<<uint(attempt))
+	if backoff > e.maxWait {
+		backoff = e.maxWait
+	}
+	return backoff
 }
