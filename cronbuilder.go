@@ -26,6 +26,33 @@ const (
 	maxDayOfWeek  = 6 // Saturday
 )
 
+// monthNames maps month names to their numeric values (case-insensitive).
+var monthNames = map[string]int{
+	"jan": 1, "january": 1,
+	"feb": 2, "february": 2,
+	"mar": 3, "march": 3,
+	"apr": 4, "april": 4,
+	"may": 5,
+	"jun": 6, "june": 6,
+	"jul": 7, "july": 7,
+	"aug": 8, "august": 8,
+	"sep": 9, "september": 9,
+	"oct": 10, "october": 10,
+	"nov": 11, "november": 11,
+	"dec": 12, "december": 12,
+}
+
+// dayOfWeekNames maps day names to their numeric values (case-insensitive).
+var dayOfWeekNames = map[string]int{
+	"sun": 0, "sunday": 0,
+	"mon": 1, "monday": 1,
+	"tue": 2, "tuesday": 2,
+	"wed": 3, "wednesday": 3,
+	"thu": 4, "thursday": 4,
+	"fri": 5, "friday": 5,
+	"sat": 6, "saturday": 6,
+}
+
 // CronBuilder facilitates building a cron expression programmatically.
 type CronBuilder struct {
 	second     string // Optional: 0-59
@@ -593,6 +620,19 @@ func (b *CronBuilder) MonthRangeStep(start, end, step int) *CronBuilder {
 	return b
 }
 
+// MonthByName sets the month field by name (e.g., "Jan", "January").
+// Case-insensitive. Returns error for unknown month names.
+func (b *CronBuilder) MonthByName(name string) *CronBuilder {
+	if b.err != nil {
+		return b
+	}
+	month, ok := monthNames[strings.ToLower(name)]
+	if !ok {
+		return b.setError(fmt.Errorf("invalid month name: %s", name))
+	}
+	return b.Month(month)
+}
+
 // --- DayOfWeek Field ---
 
 // EveryDayOfWeek sets the dayOfWeek field to '*'.
@@ -714,6 +754,19 @@ func (b *CronBuilder) DayOfWeekRangeStep(start, end, step int) *CronBuilder {
 	return b
 }
 
+// DayOfWeekByName sets the dayOfWeek field by name (e.g., "Mon", "Monday").
+// Case-insensitive. Returns error for unknown day names.
+func (b *CronBuilder) DayOfWeekByName(name string) *CronBuilder {
+	if b.err != nil {
+		return b
+	}
+	day, ok := dayOfWeekNames[strings.ToLower(name)]
+	if !ok {
+		return b.setError(fmt.Errorf("invalid day of week name: %s", name))
+	}
+	return b.DayOfWeek(day)
+}
+
 // Build finalizes the cron expression.
 // It returns the built expression string (either 5 or 6 fields depending on initialization)
 // or the first error encountered during building.
@@ -741,4 +794,22 @@ func (b *CronBuilder) Build() (string, error) {
 		return fmt.Sprintf("%s %s %s %s %s",
 			b.minute, b.hour, b.dayOfMonth, b.month, b.dayOfWeek), nil
 	}
+}
+
+// String returns the cron expression string or an error message.
+// For production use, prefer Build() to handle errors explicitly.
+// Implements fmt.Stringer interface for convenient printing and logging.
+func (b *CronBuilder) String() string {
+	expr, err := b.Build()
+	if err != nil {
+		return fmt.Sprintf("error: %v", err)
+	}
+	return expr
+}
+
+// Validate checks if the current configuration is valid.
+// Returns nil if valid, or the first validation error encountered.
+// Use this to check validity without building the expression.
+func (b *CronBuilder) Validate() error {
+	return b.err
 }

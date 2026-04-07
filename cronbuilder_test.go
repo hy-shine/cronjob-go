@@ -532,3 +532,115 @@ func TestJoinInts(t *testing.T) {
 	assert.Equal(t, "7,42", joinInts([]int{42, 7}))
 	assert.Equal(t, "", joinInts([]int{})) // Test empty slice
 }
+
+// --- Test String() and Validate() methods ---
+
+func TestCronBuilder_String(t *testing.T) {
+	t.Run("String method returns expression", func(t *testing.T) {
+		b := NewCronBuilder().Minute(0).Hour(9)
+		assert.Equal(t, "0 9 * * *", b.String())
+	})
+
+	t.Run("String method with error", func(t *testing.T) {
+		b := NewCronBuilder().Minute(-1)
+		assert.Contains(t, b.String(), "error:")
+	})
+}
+
+func TestCronBuilder_Validate(t *testing.T) {
+	t.Run("Validate returns nil for valid config", func(t *testing.T) {
+		b := NewCronBuilder().Minute(30)
+		assert.NoError(t, b.Validate())
+	})
+
+	t.Run("Validate returns error for invalid config", func(t *testing.T) {
+		b := NewCronBuilder().Minute(-1)
+		assert.Error(t, b.Validate())
+	})
+}
+
+// --- Test MonthByName ---
+
+func TestCronBuilder_MonthByName(t *testing.T) {
+	tests := []struct {
+		name      string
+		monthName string
+		expected  string
+		wantErr   bool
+	}{
+		{"January full", "January", "* * * 1 *", false},
+		{"January short", "Jan", "* * * 1 *", false},
+		{"February full", "February", "* * * 2 *", false},
+		{"Feb short", "Feb", "* * * 2 *", false},
+		{"December full", "December", "* * * 12 *", false},
+		{"Dec short", "Dec", "* * * 12 *", false},
+		{"case insensitive uppercase", "JANUARY", "* * * 1 *", false},
+		{"case insensitive mixed", "JaNuArY", "* * * 1 *", false},
+		{"invalid name", "NotAMonth", "", true},
+		{"empty string", "", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := NewCronBuilder().MonthByName(tt.monthName)
+			if tt.wantErr {
+				assert.Error(t, b.Validate())
+			} else {
+				expr, err := b.Build()
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, expr)
+			}
+		})
+	}
+
+	t.Run("Multiple months using Months", func(t *testing.T) {
+		// MonthByName sets a single value, use Months() for multiple values
+		b := NewCronBuilder().Months(1, 12)
+		expr, err := b.Build()
+		require.NoError(t, err)
+		assert.Equal(t, "* * * 1,12 *", expr)
+	})
+}
+
+// --- Test DayOfWeekByName ---
+
+func TestCronBuilder_DayOfWeekByName(t *testing.T) {
+	tests := []struct {
+		name     string
+		dayName  string
+		expected string
+		wantErr  bool
+	}{
+		{"Sunday full", "Sunday", "* * * * 0", false},
+		{"Sun short", "Sun", "* * * * 0", false},
+		{"Monday full", "Monday", "* * * * 1", false},
+		{"Mon short", "Mon", "* * * * 1", false},
+		{"Saturday full", "Saturday", "* * * * 6", false},
+		{"Sat short", "Sat", "* * * * 6", false},
+		{"case insensitive uppercase", "MONDAY", "* * * * 1", false},
+		{"case insensitive mixed", "MoNdAy", "* * * * 1", false},
+		{"invalid name", "NotADay", "", true},
+		{"empty string", "", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := NewCronBuilder().DayOfWeekByName(tt.dayName)
+			if tt.wantErr {
+				assert.Error(t, b.Validate())
+			} else {
+				expr, err := b.Build()
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, expr)
+			}
+		})
+	}
+
+	t.Run("Multiple days using DaysOfWeek", func(t *testing.T) {
+		// DayOfWeekByName sets a single value, use DaysOfWeek() for multiple values
+		b := NewCronBuilder().DaysOfWeek(1, 5)
+		expr, err := b.Build()
+		require.NoError(t, err)
+		assert.Equal(t, "* * * * 1,5", expr)
+	})
+}
