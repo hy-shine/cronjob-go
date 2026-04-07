@@ -19,6 +19,7 @@
 *   **批量操作:** 原子性地添加多个任务 (`AddBatch`)。
 *   **任务查询:** 获取任务详情 (`Get`) 并列出所有任务 ID (`Jobs`, `Len`)。
 *   **清空所有任务:** 移除所有已调度的任务 (`Clear`)。
+* **表达式构建器:** 使用流式 API 编程式构建 cron 表达式。
 
 ## 安装
 
@@ -45,7 +46,7 @@ func main() {
 
 	// Add a job that runs every 5 seconds
 	err = cron.Add("job1", "*/5 * * * * *", func() error {
-		fmt.Info("Running job1")
+		fmt.Println("Running job1")
 		return nil
 	})
 	if err != nil {
@@ -54,22 +55,35 @@ func main() {
 
 	// Add another job
 	err = cron.Add("job2", "@every 10s", func() error {
-		fmt.Info("Running job2")
+		fmt.Println("Running job2")
 		return nil
 	})
 	if err != nil {
-		fmt.Error("Failed to add job2", "error", err)
+		fmt.Errorf("Failed to add job2")
 	}
 
 	// Start the scheduler
 	cron.Start()
-	fmt.Info("Cron scheduler started")
+	fmt.Println("Cron scheduler started")
 
 	// Ensure scheduler stops gracefully on exit
 	defer cron.Stop()
 
 	select {}
 }
+```
+
+## 表达式构建器
+
+编程式构建 cron 表达式：
+
+```go
+expr, _ := cronjob.NewCronBuilder().
+    Minute(30).
+    Hour(9).
+    DayOfWeekByName("Monday").
+    Build()
+// 结果: "30 9 * * 1"
 ```
 
 ## API 参考
@@ -84,13 +98,6 @@ func main() {
 *   `cronjob.WithLocation(loc *time.Location)`: 设置用于解释计划的时区（默认为 `time.Local`）。
 *   `cronjob.WithRetry(retry uint, wait time.Duration)`: 配置常规重试（固定的 `wait` 持续时间）。`retry` 是初始失败*之后*的尝试次数。
 *   `cronjob.WithRetryBackoff(retry uint, initialWait, maxWait time.Duration)`: 配置指数退避重试。等待时间从 `initialWait` 开始，每次加倍（带有抖动），最多不超过 `maxWait`。
-
-### 内置错误
-
-*   `cronjob.ErrJobNotFound`: 指定的任务 ID 不存在。
-*   `cronjob.ErrJobIdEmpty`: 提供了空字符串作为任务 ID。
-*   `cronjob.ErrSpecEmpty`: 提供了空字符串作为 cron 规范。
-*   `cronjob.ErrJobIdAlreadyExists`: 尝试添加一个 ID 已被使用的任务。
 
 ## 高级用法
 

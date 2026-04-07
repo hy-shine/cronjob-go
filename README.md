@@ -18,6 +18,7 @@ A thread-safe wrapper around the [robfig/cron/v3](https://github.com/robfig/cron
 *   **Skip Concurrent Runs:** Option to prevent a job from starting if its previous invocation is still running.
 *   **Batch Operations:** Add multiple jobs atomically (`AddBatch`).
 *   **Clear All Jobs:** Remove all scheduled jobs (`Clear`).
+* **Cron Expression Builder:** Programmatically build cron expressions with fluent API.
 
 ## Installation
 
@@ -44,7 +45,7 @@ func main() {
 
 	// Add a job that runs every 5 seconds
 	err = cron.Add("job1", "*/5 * * * * *", func() error {
-		fmt.Info("Running job1")
+		fmt.Println("Running job1")
 		return nil
 	})
 	if err != nil {
@@ -53,22 +54,35 @@ func main() {
 
 	// Add job2
 	err = cron.Add("job2", "@every 10s", func() error {
-		fmt.Info("Running job2")
+		fmt.Println("Running job2")
 		return nil
 	})
 	if err != nil {
-		fmt.Error("Failed to add job2", "error", err)
+		fmt.Errorf("Failed to add job2")
 	}
 
 	// Start the scheduler
 	cron.Start()
-	fmt.Info("Cron scheduler started")
+	fmt.Println("Cron scheduler started")
 
 	// Ensure scheduler stops gracefully on exit
 	defer cron.Stop()
 
 	select {}
 }
+```
+
+## CronBuilder
+
+Build cron expressions programmatically:
+
+```go
+expr, _ := cronjob.NewCronBuilder().
+    Minute(30).
+    Hour(9).
+    DayOfWeekByName("Monday").
+    Build()
+// Result: "30 9 * * 1"
 ```
 
 ## API Reference
@@ -83,13 +97,6 @@ Pass these to `cronjob.New()`:
 *   `cronjob.WithLocation(loc *time.Location)`: Sets the timezone for interpreting schedules (default: `time.Local`).
 *   `cronjob.WithRetry(retry uint, wait time.Duration)`: Configures regular retries (fixed `wait` duration). `retry` is the number of attempts *after* the initial failure.
 *   `cronjob.WithRetryBackoff(retry uint, initialWait, maxWait time.Duration)`: Configures exponential backoff retries. Wait time starts at `initialWait`, doubles each time (with jitter), up to `maxWait`.
-
-### Predefined Errors
-
-*   `cronjob.ErrJobNotFound`: The specified job ID does not exist.
-*   `cronjob.ErrJobIdEmpty`: An empty string was provided as a job ID.
-*   `cronjob.ErrSpecEmpty`: An empty string was provided as a cron spec.
-*   `cronjob.ErrJobIdAlreadyExists`: Attempted to add a job with an ID that is already in use.
 
 ## Advanced Usage
 
